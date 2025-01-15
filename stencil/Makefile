@@ -1,47 +1,73 @@
 ##############################################################################
 # Variables de compilation
 ##############################################################################
-# On utilise mpicc (qui est un wrapper autour de gcc/clang avec les bonnes libs MPI).
-CC      = mpicc
 
-# Options de compilation : -Wall pour les avertissements, -g pour le debug, -O4 pour l’optimisation
-CFLAGS += -Wall -g -O4
+# mpicc = wrapper autour de gcc ou clang pour inclure MPI
+MPICC = mpicc
 
-# Bibliothèques à l’édition de liens : math et real-time
-LDLIBS += -lm -lrt
+# Options de compilation communes (avertissements, debug, optimisation)
+CFLAGS_COMMON = -Wall -g -O4
 
-# Nom du binaire à générer
-TARGET  = stencil_mpi
+# On ajoute -fopenmp pour les versions OpenMP ou hybrides
+CFLAGS_OMP = $(CFLAGS_COMMON) -fopenmp
+
+# Bibliothèques à l’édition de liens : math et temps réel
+LDLIBS = -lm -lrt
+
+# Noms des exécutables
+TARGET_MPI    = stencil_mpi
+TARGET_OMP    = stencil_omp
+TARGET_HYBRID = stencil_hybrid
 
 ##############################################################################
 # Règles "par défaut"
 ##############################################################################
-# all dépend de la cible principale $(TARGET).
-all: $(TARGET)
+# Par défaut, on compile tout
+all: $(TARGET_MPI) $(TARGET_OMP) $(TARGET_HYBRID)
 
-# Règle pour produire le binaire à partir des .o
-$(TARGET): stencil_mpi.o
-	$(CC) $(CFLAGS) -o $@ $^ $(LDLIBS)
+##############################################################################
+# 1) Cible MPI "pure"
+##############################################################################
+# Supposons que le code source s'appelle stencil_mpi.c
+stencil_mpi.o: stencil_mpi.c
+	$(MPICC) $(CFLAGS_COMMON) -c $<
 
-# Règle générique de compilation .c -> .o
-%.o: %.c
-	$(CC) $(CFLAGS) -c $<
+$(TARGET_MPI): stencil_mpi.o
+	$(MPICC) $(CFLAGS_COMMON) -o $@ $^ $(LDLIBS)
+
+##############################################################################
+# 2) Cible OpenMP "pure"
+##############################################################################
+# Supposons que le code source s'appelle stencil_omp.c
+stencil_omp.o: stencil_omp.c
+	$(MPICC) $(CFLAGS_OMP) -c $<
+
+$(TARGET_OMP): stencil_omp.o
+	$(MPICC) $(CFLAGS_OMP) -o $@ $^ $(LDLIBS)
+
+##############################################################################
+# 3) Cible Hybride MPI + OpenMP
+##############################################################################
+# Supposons que le code source s'appelle stencil_hybrid.c
+stencil_hybrid.o: stencil_hybrid.c
+	$(MPICC) $(CFLAGS_OMP) -c $<
+
+$(TARGET_HYBRID): stencil_hybrid.o
+	$(MPICC) $(CFLAGS_OMP) -o $@ $^ $(LDLIBS)
 
 ##############################################################################
 # Règles de nettoyage
 ##############################################################################
-# Supprime le binaire et les fichiers objets
 clean:
-	-rm -f $(TARGET) *.o
+	-rm -f *.o $(TARGET_MPI) $(TARGET_OMP) $(TARGET_HYBRID)
 
-# Supprime en plus les fichiers temporaires
 mrproper: clean
 	-rm -f *~
 
 ##############################################################################
-# Archivage du code (si besoin)
+# Archivage du code (optionnel)
 ##############################################################################
-# Crée une archive .tar.gz contenant le code et le Makefile
-archive: stencil_mpi.c Makefile
+# Ex: on suppose que tout est dans le répertoire stencil/
+archive: stencil_mpi.c stencil_omp.c stencil_hybrid.c Makefile
 	( cd .. ; tar czf stencil.tar.gz stencil/ )
 

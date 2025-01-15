@@ -2,72 +2,99 @@
 # Variables de compilation
 ##############################################################################
 
-# mpicc = wrapper autour de gcc ou clang pour inclure MPI
-MPICC = mpicc
+# Dossier de build où l'on place les .o et les exécutables
+BUILD_DIR   = build
 
-# Options de compilation communes (avertissements, debug, optimisation)
-CFLAGS_COMMON = -Wall -g -O4
+# 1) Version séquentielle (pas besoin de mpicc ni -fopenmp)
+CC_SEQ      = gcc
+CFLAGS_SEQ  = -Wall -g -O4
+LDLIBS_SEQ  = -lm -lrt
 
-# On ajoute -fopenmp pour les versions OpenMP ou hybrides
-CFLAGS_OMP = $(CFLAGS_COMMON) -fopenmp
+# 2) Version MPI (mpicc)
+MPICC       = mpicc
+CFLAGS_MPI  = -Wall -g -O4
+LDLIBS_MPI  = -lm -lrt
 
-# Bibliothèques à l’édition de liens : math et temps réel
-LDLIBS = -lm -lrt
+# 3) Version OpenMP (on peut utiliser mpicc -fopenmp ou gcc -fopenmp)
+CC_OMP      = mpicc
+CFLAGS_OMP  = -Wall -g -O4 -fopenmp
+LDLIBS_OMP  = -lm -lrt
 
-# Noms des exécutables
-TARGET_MPI    = stencil_mpi
-TARGET_OMP    = stencil_omp
-TARGET_HYBRID = stencil_hybrid
+# 4) Version Hybride MPI+OpenMP (toujours mpicc -fopenmp)
+CC_HYB      = mpicc
+CFLAGS_HYB  = -Wall -g -O4 -fopenmp
+LDLIBS_HYB  = -lm -lrt
+
+# Noms des exécutables (placés dans build/)
+TARGET_SEQ     = stencil_seq
+TARGET_MPI     = stencil_mpi
+TARGET_OMP     = stencil_omp
+TARGET_HYBRID  = stencil_hybrid
 
 ##############################################################################
 # Règles "par défaut"
 ##############################################################################
-# Par défaut, on compile tout
-all: $(TARGET_MPI) $(TARGET_OMP) $(TARGET_HYBRID)
+# On construit tout : seq, mpi, omp, hybrid
+all: $(BUILD_DIR) \
+     $(BUILD_DIR)/$(TARGET_SEQ) \
+     $(BUILD_DIR)/$(TARGET_MPI) \
+     $(BUILD_DIR)/$(TARGET_OMP) \
+     $(BUILD_DIR)/$(TARGET_HYBRID)
+
+# Crée le répertoire build/ si nécessaire
+$(BUILD_DIR):
+	mkdir -p $(BUILD_DIR)
 
 ##############################################################################
-# 1) Cible MPI "pure"
+# 1) Version séquentielle
 ##############################################################################
-# Supposons que le code source s'appelle stencil_mpi.c
-stencil_mpi.o: stencil_mpi.c
-	$(MPICC) $(CFLAGS_COMMON) -c $<
+# compile le code source stencil.c -> objet .o
+$(BUILD_DIR)/stencil_seq.o: stencil.c
+	$(CC_SEQ) $(CFLAGS_SEQ) -c $< -o $@
 
-$(TARGET_MPI): stencil_mpi.o
-	$(MPICC) $(CFLAGS_COMMON) -o $@ $^ $(LDLIBS)
-
-##############################################################################
-# 2) Cible OpenMP "pure"
-##############################################################################
-# Supposons que le code source s'appelle stencil_omp.c
-stencil_omp.o: stencil_omp.c
-	$(MPICC) $(CFLAGS_OMP) -c $<
-
-$(TARGET_OMP): stencil_omp.o
-	$(MPICC) $(CFLAGS_OMP) -o $@ $^ $(LDLIBS)
+# édite les liens pour produire l'exécutable stencil_seq
+$(BUILD_DIR)/$(TARGET_SEQ): $(BUILD_DIR)/stencil_seq.o
+	$(CC_SEQ) $(CFLAGS_SEQ) -o $@ $^ $(LDLIBS_SEQ)
 
 ##############################################################################
-# 3) Cible Hybride MPI + OpenMP
+# 2) Version MPI
 ##############################################################################
-# Supposons que le code source s'appelle stencil_hybrid.c
-stencil_hybrid.o: stencil_hybrid.c
-	$(MPICC) $(CFLAGS_OMP) -c $<
+$(BUILD_DIR)/stencil_mpi.o: stencil_mpi.c
+	$(MPICC) $(CFLAGS_MPI) -c $< -o $@
 
-$(TARGET_HYBRID): stencil_hybrid.o
-	$(MPICC) $(CFLAGS_OMP) -o $@ $^ $(LDLIBS)
+$(BUILD_DIR)/$(TARGET_MPI): $(BUILD_DIR)/stencil_mpi.o
+	$(MPICC) $(CFLAGS_MPI) -o $@ $^ $(LDLIBS_MPI)
+
+##############################################################################
+# 3) Version OpenMP
+##############################################################################
+$(BUILD_DIR)/stencil_omp.o: stencil_omp.c
+	$(CC_OMP) $(CFLAGS_OMP) -c $< -o $@
+
+$(BUILD_DIR)/$(TARGET_OMP): $(BUILD_DIR)/stencil_omp.o
+	$(CC_OMP) $(CFLAGS_OMP) -o $@ $^ $(LDLIBS_OMP)
+
+##############################################################################
+# 4) Version Hybride MPI + OpenMP
+##############################################################################
+$(BUILD_DIR)/stencil_hybrid.o: stencil_hybrid.c
+	$(CC_HYB) $(CFLAGS_HYB) -c $< -o $@
+
+$(BUILD_DIR)/$(TARGET_HYBRID): $(BUILD_DIR)/stencil_hybrid.o
+	$(CC_HYB) $(CFLAGS_HYB) -o $@ $^ $(LDLIBS_HYB)
 
 ##############################################################################
 # Règles de nettoyage
 ##############################################################################
 clean:
-	-rm -f *.o $(TARGET_MPI) $(TARGET_OMP) $(TARGET_HYBRID)
+	-rm -rf $(BUILD_DIR)
 
 mrproper: clean
 	-rm -f *~
 
 ##############################################################################
-# Archivage du code (optionnel)
+# Archivage éventuel
 ##############################################################################
-# Ex: on suppose que tout est dans le répertoire stencil/
-archive: stencil_mpi.c stencil_omp.c stencil_hybrid.c Makefile
+archive: stencil.c stencil_mpi.c stencil_omp.c stencil_hybrid.c Makefile
 	( cd .. ; tar czf stencil.tar.gz stencil/ )
 

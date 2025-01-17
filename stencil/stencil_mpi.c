@@ -8,16 +8,13 @@
 #define STENCIL_SIZE 2500
 typedef float stencil_t;
 
-/** Coefficient et seuil pour la diffusion */
 static const stencil_t alpha = 0.02;
 static const stencil_t epsilon = 0.0001;
-/** Nombre max d’itérations */
 static const int stencil_max_steps = 100000;
 
 /* Macro pour indexer (x, y) dans un tableau local (avec halo) de dimension (local_nx+2) * (local_ny+2). */
 #define IDX(sd, x, y) ((y) * ((sd)->local_nx + 2) + (x))
 
-/* Structure contenant tout ce dont on a besoin. */
 typedef struct {
     /* MPI */
     int rank;
@@ -41,9 +38,7 @@ typedef struct {
     MPI_Datatype row_type;
 } StencilData;
 
-/* =========================================================== */
-/* 1) Init MPI, cart comm, etc.                               */
-/* =========================================================== */
+
 static void init_mpi(int *argc, char ***argv, StencilData *sd)
 {
     MPI_Init(argc, argv);
@@ -53,12 +48,9 @@ static void init_mpi(int *argc, char ***argv, StencilData *sd)
     sd->global_ny = STENCIL_SIZE;
 }
 
-/* =========================================================== */
-/* 2) Créer topologie cartésienne 2D                          */
-/* =========================================================== */
+
 static void create_cart_2d(StencilData *sd)
 {
-    /* Dimensions automatiques avec MPI_Dims_create. */
     sd->dims[0] = 0;
     sd->dims[1] = 0;
     MPI_Dims_create(sd->size, 2, sd->dims);
@@ -74,9 +66,7 @@ static void create_cart_2d(StencilData *sd)
     sd->local_ny = sd->global_ny / sd->dims[1];
 }
 
-/* =========================================================== */
-/* 3) Allocation des tableaux avec halos                       */
-/* =========================================================== */
+
 static void allocate_arrays(StencilData *sd)
 {
     int size_with_halo = (sd->local_nx + 2) * (sd->local_ny + 2);
@@ -88,13 +78,9 @@ static void allocate_arrays(StencilData *sd)
     }
 }
 
-/* =========================================================== */
-/* 4) Initialisation des valeurs locales                       */
-/*    en tenant compte des conditions de bord globales         */
-/* =========================================================== */
+
 static void init_values(StencilData *sd)
 {
-    /* On met tout à 0 au départ. */
     for (int j = 0; j < sd->local_ny + 2; j++) {
         for (int i = 0; i < sd->local_nx + 2; i++) {
             sd->values[IDX(sd, i, j)] = 0.0f;
@@ -138,9 +124,7 @@ static void init_values(StencilData *sd)
     }
 }
 
-/* =========================================================== */
-/* 5) Création des types dérivés MPI pour colonnes/lignes      */
-/* =========================================================== */
+
 static void create_mpi_types(StencilData *sd)
 {
     /* Type colonne : block_ny éléments, stride=(local_nx+2). */
@@ -152,27 +136,17 @@ static void create_mpi_types(StencilData *sd)
     MPI_Type_commit(&sd->row_type);
 }
 
-/* =========================================================== */
-/* 6) Echange des halos : on utilise MPI_Sendrecv              */
-/* =========================================================== */
+
 static void exchange_halos(StencilData *sd, stencil_t *src)
 {
     int rank_left, rank_right;
     int rank_up, rank_down;
 
-    // dimension=0 => X, dimension=1 => Y
-    // On veut : rank_up = py-1, rank_down = py+1
-    // => Cart_shift(..., 1, +1, &rank_up, &rank_down) signifie:
-    //    rank_up = voisine en py-1
-    //    rank_down= voisine en py+1
+
     MPI_Cart_shift(sd->cart_comm, 0, 1, &rank_left, &rank_right);
     MPI_Cart_shift(sd->cart_comm, 1, 1, &rank_up, &rank_down);
 
-    // ********************
-    // 1) Echange "top <-> bottom" en criss-cross
-    //    On envoie notre top vers rank_up, on reçoit le bottom de rank_down
-    //    => on utilise un tag=101
-    // ********************
+
     MPI_Sendrecv(
         &src[IDX(sd, 1, 1)], 1, sd->row_type,  // top row
         rank_up, 101,
@@ -181,11 +155,6 @@ static void exchange_halos(StencilData *sd, stencil_t *src)
         sd->cart_comm, MPI_STATUS_IGNORE
     );
 
-    // ********************
-    // 2) Echange "bottom <-> top"
-    //    On envoie notre bottom vers rank_down, on reçoit le top de rank_up
-    //    => on utilise un tag=102
-    // ********************
     MPI_Sendrecv(
         &src[IDX(sd, 1, sd->local_ny)], 1, sd->row_type, // bottom row
         rank_down, 102,
@@ -194,12 +163,7 @@ static void exchange_halos(StencilData *sd, stencil_t *src)
         sd->cart_comm, MPI_STATUS_IGNORE
     );
 
-    // ********************
-    // 3) Echange des colonnes (gauche / droite) -- même principe
-    //    a) Envoyer "colonne de gauche" -> rank_left, recevoir "colonne de droite" <- rank_right
-    //    b) Envoyer "colonne de droite" -> rank_right, recevoir "colonne de gauche" <- rank_left
-    // ********************
-    // a) left<->right
+
     MPI_Sendrecv(
         &src[IDX(sd, 1, 1)], 1, sd->column_type,
         rank_left, 201,
@@ -208,7 +172,6 @@ static void exchange_halos(StencilData *sd, stencil_t *src)
         sd->cart_comm, MPI_STATUS_IGNORE
     );
 
-    // b) right<->left
     MPI_Sendrecv(
         &src[IDX(sd, sd->local_nx, 1)], 1, sd->column_type,
         rank_right, 202,
@@ -219,25 +182,18 @@ static void exchange_halos(StencilData *sd, stencil_t *src)
 }
 
 
-/* =========================================================== */
-/* 7) Calcul d’un pas : swap, échange halos, mise à jour       */
-/*    Retourne 1 si localement convergent, 0 sinon             */
-/* =========================================================== */
+
 static int do_step(StencilData *sd)
 {
-    /* On swap les buffers : on calcule 'values' à partir de 'prev_values' */
     stencil_t* tmp = sd->prev_values;
     sd->prev_values = sd->values;
     sd->values = tmp;
 
-    /* Echange des halos avant le calcul */
     exchange_halos(sd, sd->prev_values);
 
-    /* Calcul au centre */
     int local_conv = 1;
     for (int j = 1; j <= sd->local_ny; j++) {
         for (int i = 1; i <= sd->local_nx; i++) {
-            /* Mise à jour (même formule que le code séquentiel) */
             sd->values[IDX(sd, i, j)] =
                 alpha * ( sd->prev_values[IDX(sd, i-1, j)]
                         + sd->prev_values[IDX(sd, i+1, j)]
@@ -255,10 +211,7 @@ static int do_step(StencilData *sd)
     return local_conv;
 }
 
-/* =========================================================== */
-/* 8) Affichage global (sur le rang 0)                         */
-/*    On envoie (send) les blocs locaux au rang 0 qui reconstruit. */
-/* =========================================================== */
+
 static void print_global_array(StencilData *sd)
 {
     int px = sd->coords[0];
@@ -268,29 +221,24 @@ static void print_global_array(StencilData *sd)
     int global_nx = sd->global_nx;
     int global_ny = sd->global_ny;
 
-    /* On va envoyer un buffer local (sans halo) de size block_nx*block_ny */
     int local_size = block_nx * block_ny;
     stencil_t* local_buf = (stencil_t*) malloc(local_size * sizeof(stencil_t));
     if (!local_buf) {
         fprintf(stderr, "Erreur d’alloc dans print_global_array\n");
         return;
     }
-    /* Copie (sans halo) */
     for (int j = 0; j < block_ny; j++) {
         for (int i = 0; i < block_nx; i++) {
             local_buf[j*block_nx + i] = sd->values[IDX(sd, i+1, j+1)];
         }
     }
 
-    /* Sur le rang 0, on va reconstituer le tableau global. */
     stencil_t* global_buf = NULL;
     if (sd->rank == 0) {
         global_buf = (stencil_t*) malloc(global_nx * global_ny * sizeof(stencil_t));
     }
 
-    /* On envoie d’abord px,py pour savoir où ranger, puis le bloc. */
     if (sd->rank == 0) {
-        /* Copie locale d’abord */
         int gox = px * block_nx;
         int goy = py * block_ny;
         for (int j = 0; j < block_ny; j++) {
@@ -299,7 +247,6 @@ static void print_global_array(StencilData *sd)
                    block_nx * sizeof(stencil_t));
         }
 
-        /* Réception depuis les autres ranks */
         MPI_Status st;
         for (int r = 1; r < sd->size; r++) {
             int coords_sender[2];
@@ -317,7 +264,6 @@ static void print_global_array(StencilData *sd)
             }
         }
 
-        /* Affichage final */
         printf("\n===== Résultat global final =====\n");
         for (int j = 0; j < global_ny; j++) {
             for (int i = 0; i < global_nx; i++) {
@@ -336,9 +282,7 @@ static void print_global_array(StencilData *sd)
     free(local_buf);
 }
 
-/* =========================================================== */
-/* 9) Libération et finalisation MPI                           */
-/* =========================================================== */
+
 static void clean_up(StencilData *sd)
 {
     free(sd->values);
@@ -349,9 +293,6 @@ static void clean_up(StencilData *sd)
     MPI_Finalize();
 }
 
-/* =========================================================== */
-/* main : utilise les fonctions ci-dessus                      */
-/* =========================================================== */
 int main(int argc, char** argv)
 {
     StencilData sd;
@@ -361,16 +302,13 @@ int main(int argc, char** argv)
     init_values(&sd);
     create_mpi_types(&sd);
 
-    /* Mesure du temps */
     struct timespec t1, t2;
     clock_gettime(CLOCK_MONOTONIC, &t1);
 
-    /* Boucle de calcul */
     int s;
     int global_converged = 0;
     for (s = 0; s < stencil_max_steps; s++) {
         int local_conv = do_step(&sd);
-        /* Réduction logique AND : si tout le monde converge => global_converged=1 */
         MPI_Allreduce(&local_conv, &global_converged, 1, MPI_INT, MPI_LAND, sd.cart_comm);
         if (global_converged) {
             break;
@@ -380,19 +318,16 @@ int main(int argc, char** argv)
     clock_gettime(CLOCK_MONOTONIC, &t2);
     double elapsed_usec = (t2.tv_sec - t1.tv_sec)*1e6 + (t2.tv_nsec - t1.tv_nsec)/1e3;
 
-    /* Affichage temps & performances sur le rang 0 */
     if (sd.rank == 0) {
         printf("# steps = %d\n", s);
         printf("# time  = %g usecs.\n", elapsed_usec);
-        double flop = 6.0 * sd.global_nx * sd.global_ny * s;  /* calcul naïf */
+        double flop = 6.0 * sd.global_nx * sd.global_ny * s; 
         double gflops = flop / (elapsed_usec * 1000.0);
         printf("# gflops= %g\n", gflops);
     }
 
-    /* (Ré)activez l’affichage global si nécessaire */
     // print_global_array(&sd);
 
-    /* Nettoyage */
     clean_up(&sd);
     return 0;
 }
